@@ -20,12 +20,12 @@ import (
 	"context"
 	"fmt"
 
+	customStorage "k8s.io/apiextensions-apiserver/pkg/storage"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/registry/generic"
-	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
 
@@ -40,16 +40,20 @@ type apiServerStrategy struct {
 }
 
 // apiServerStrategy must implement rest.RESTCreateUpdateStrategy
-var _ rest.RESTCreateUpdateStrategy = apiServerStrategy{}
+var _ customStorage.Strategy = apiServerStrategy{}
 var Strategy = apiServerStrategy{}
 
 // NewStrategy creates a new apiServerStrategy.
-func NewStrategy(typer runtime.ObjectTyper) rest.CreateUpdateResetFieldsStrategy {
+func NewStrategy(typer runtime.ObjectTyper) customStorage.Strategy {
 	return apiServerStrategy{typer, names.SimpleNameGenerator}
 }
 
 func (apiServerStrategy) NamespaceScoped() bool {
 	return false
+}
+
+func (apiServerStrategy) ShortNames() []string {
+	return []string{}
 }
 
 func (apiServerStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
@@ -116,12 +120,24 @@ type apiServerStatusStrategy struct {
 }
 
 // NewStatusStrategy creates a new apiServerStatusStrategy.
-func NewStatusStrategy(typer runtime.ObjectTyper) rest.UpdateResetFieldsStrategy {
+func NewStatusStrategy(typer runtime.ObjectTyper) customStorage.Strategy {
 	return apiServerStatusStrategy{typer, names.SimpleNameGenerator}
 }
 
 func (apiServerStatusStrategy) NamespaceScoped() bool {
 	return false
+}
+
+func (apiServerStatusStrategy) ShortNames() []string {
+	return []string{}
+}
+
+func (apiServerStatusStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
+	return []*field.Error{}
+}
+
+func (apiServerStatusStrategy) WarningsOnCreate(ctx context.Context, obj runtime.Object) []string {
+	return nil
 }
 
 func (apiServerStatusStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
@@ -138,6 +154,8 @@ func (apiServerStatusStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldp
 
 	return fields
 }
+
+func (apiServerStatusStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {}
 
 func (apiServerStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newAPIService := obj.(*apiregistration.APIService)

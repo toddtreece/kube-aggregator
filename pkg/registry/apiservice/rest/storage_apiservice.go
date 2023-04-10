@@ -17,6 +17,8 @@ limitations under the License.
 package rest
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -26,7 +28,7 @@ import (
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration"
 	v1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
-	apiservicestorage "k8s.io/kube-aggregator/pkg/registry/apiservice/etcd"
+	apiservicestorage "k8s.io/kube-aggregator/pkg/registry/apiservice/storage"
 )
 
 // NewRESTStorage returns an APIGroupInfo object that will work against apiservice.
@@ -36,7 +38,11 @@ func NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSourc
 	storage := map[string]rest.Storage{}
 
 	if resource := "apiservices"; apiResourceConfigSource.ResourceEnabled(v1.SchemeGroupVersion.WithResource(resource)) {
-		apiServiceREST := apiservicestorage.NewREST(aggregatorscheme.Scheme, restOptionsGetter)
+		store, err := apiservicestorage.NewREST(aggregatorscheme.Scheme, restOptionsGetter)
+		if err != nil {
+			panic(fmt.Sprintf("unable to create apiservice storage: %v", err))
+		}
+		apiServiceREST := store
 		storage[resource] = apiServiceREST
 		storage[resource+"/status"] = apiservicestorage.NewStatusREST(aggregatorscheme.Scheme, apiServiceREST)
 	}

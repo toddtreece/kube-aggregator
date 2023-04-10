@@ -14,51 +14,50 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package etcd
+package storage
 
 import (
 	"context"
 	"fmt"
 
+	customStorage "k8s.io/apiextensions-apiserver/pkg/storage"
+	"k8s.io/apiextensions-apiserver/pkg/storage/filepath"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metatable "k8s.io/apimachinery/pkg/api/meta/table"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/registry/generic"
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration"
 	"k8s.io/kube-aggregator/pkg/registry/apiservice"
 	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
 )
 
+var Storage customStorage.NewStorageFunc = filepath.Storage
+
 // REST implements a RESTStorage for API services against etcd
 type REST struct {
-	*genericregistry.Store
+	customStorage.Storage
 }
 
 // NewREST returns a RESTStorage object that will work against API services.
-func NewREST(scheme *runtime.Scheme, optsGetter generic.RESTOptionsGetter) *REST {
+func NewREST(scheme *runtime.Scheme, optsGetter generic.RESTOptionsGetter) (*REST, error) {
 	strategy := apiservice.NewStrategy(scheme)
-	store := &genericregistry.Store{
-		NewFunc:                  func() runtime.Object { return &apiregistration.APIService{} },
-		NewListFunc:              func() runtime.Object { return &apiregistration.APIServiceList{} },
-		PredicateFunc:            apiservice.MatchAPIService,
-		DefaultQualifiedResource: apiregistration.Resource("apiservices"),
-
-		CreateStrategy:      strategy,
-		UpdateStrategy:      strategy,
-		DeleteStrategy:      strategy,
-		ResetFieldsStrategy: strategy,
-
-		// TODO: define table converter that exposes more than name/creation timestamp
-		TableConvertor: rest.NewDefaultTableConvertor(apiregistration.Resource("apiservices")),
+	gr := apiregistration.Resource("apiservices")
+	tableConvertor := rest.NewDefaultTableConvertor(gr)
+	store, err := Storage(
+		gr,
+		strategy,
+		optsGetter,
+		tableConvertor,
+		func() runtime.Object { return &apiregistration.APIService{} },
+		func() runtime.Object { return &apiregistration.APIServiceList{} },
+	)
+	if err != nil {
+		return nil, err
 	}
-	options := &generic.StoreOptions{RESTOptions: optsGetter, AttrFunc: apiservice.GetAttrs}
-	if err := store.CompleteWithOptions(options); err != nil {
-		panic(err) // TODO: Propagate error up
-	}
-	return &REST{store}
+
+	return &REST{store}, err
 }
 
 // Implement CategoriesProvider
@@ -127,17 +126,14 @@ func getCondition(conditions []apiregistration.APIServiceCondition, conditionTyp
 // It is based on the original REST so that we can share the same underlying store
 func NewStatusREST(scheme *runtime.Scheme, rest *REST) *StatusREST {
 	strategy := apiservice.NewStatusStrategy(scheme)
-	statusStore := *rest.Store
-	statusStore.CreateStrategy = nil
-	statusStore.DeleteStrategy = nil
-	statusStore.UpdateStrategy = strategy
-	statusStore.ResetFieldsStrategy = strategy
-	return &StatusREST{store: &statusStore}
+	statusStore := rest.Storage
+	statusStore.SetStrategy(strategy)
+	return &StatusREST{store: statusStore}
 }
 
 // StatusREST implements the REST endpoint for changing the status of an APIService.
 type StatusREST struct {
-	store *genericregistry.Store
+	store customStorage.Storage
 }
 
 var _ = rest.Patcher(&StatusREST{})
@@ -145,6 +141,14 @@ var _ = rest.Patcher(&StatusREST{})
 // New creates a new APIService object.
 func (r *StatusREST) New() runtime.Object {
 	return &apiregistration.APIService{}
+}
+
+func (r *StatusREST) NamespaceScoped() bool {
+	return false
+}
+
+func (r *StatusREST) GenerateName(base string) string {
+	return r.store.GetStrategy().GenerateName(base)
 }
 
 // Destroy cleans up resources on shutdown.
@@ -167,5 +171,5 @@ func (r *StatusREST) Update(ctx context.Context, name string, objInfo rest.Updat
 
 // GetResetFields implements rest.ResetFieldsStrategy
 func (r *StatusREST) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
-	return r.store.GetResetFields()
+	return r.store.GetStrategy().GetResetFields()
 }
