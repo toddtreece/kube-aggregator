@@ -31,6 +31,7 @@ import (
 	apiserverproxyutil "k8s.io/apiserver/pkg/util/proxy"
 	"k8s.io/apiserver/pkg/util/x509metrics"
 	"k8s.io/client-go/transport"
+	"k8s.io/component-base/tracing"
 	"k8s.io/klog/v2"
 	apiregistrationv1api "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	apiregistrationv1apihelper "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1/helper"
@@ -59,6 +60,9 @@ type proxyHandler struct {
 
 	// reject to forward redirect response
 	rejectForwardingRedirects bool
+
+	// tracerProvider is used to wrap the handler with tracing
+	tracerProvider tracing.TracerProvider
 }
 
 type proxyHandlingInfo struct {
@@ -162,11 +166,12 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		transport.SetAuthProxyHeaders(newReq, user.GetName(), user.GetGroups(), user.GetExtra())
 	}
 
-	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, true, upgrade, &responder{w: w})
+	upgradeAwareHandler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, true, upgrade, &responder{w: w})
 	if r.rejectForwardingRedirects {
-		handler.RejectForwardingRedirects = true
+		upgradeAwareHandler.RejectForwardingRedirects = true
 	}
 	utilflowcontrol.RequestDelegated(req.Context())
+	handler := tracing.WithTracing(upgradeAwareHandler, r.tracerProvider, "proxyHandler "+handlingInfo.name)
 	handler.ServeHTTP(w, newReq)
 }
 
@@ -217,6 +222,8 @@ func (r *proxyHandler) updateAPIService(apiService *apiregistrationv1api.APIServ
 		x509MissingSANCounter,
 		x509InsecureSHA1Counter,
 	))
+
+	transportConfig.Wrap(tracing.WrapperFor(r.tracerProvider))
 
 	newInfo := proxyHandlingInfo{
 		name:             apiService.Name,
